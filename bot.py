@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import requests
 
-TOKEN = "9271726236:AAE4Xk5O_101xZXVy64LtE8S5dsNsP5FjeQ"
+TOKEN = "9264641964:AAEC_Ffv61DJ9SYviVbXTgiEZnmI3XuQsh4"
 
 app = Flask(__name__)
 
