@@ -20,7 +20,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         r = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=10).json()
         prix = r['rates']['USD']
-        await update.message.reply_text(f"EUR/USD actuel : {prix}\nSignal : Surveille le graphique H1")
+        await update.message.reply_text(f"EUR/USD actuel : {prix}")
     except Exception as e:
         await update.message.reply_text(f"Erreur : {e}")
 
