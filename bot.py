@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = "9264641964:AAEC_Ffv61DJ9SYviVbXTgiEZnmI3XuQsh4"
 CHAT_ID = 7548965711
-DERIV_TOKEN = "pat_5f035818cade5234e92f8ef4e019a4d1badb367a8261a7461589e24004ad0590"
+DERIV_TOKEN = "pat_3bc24da9f90ca5d7f93912348e02d42cbd1fb972b02dc8717887993585c28679"
 
 app = Flask(__name__)
 
@@ -28,35 +28,45 @@ def get_yahoo_price(symbol):
     except:
         return None
 
-def get_deriv_history(symbol, count=20):
-    # Récupère les 20 derniers ticks pour voir si ça monte ou ça casse
+def get_all_deriv_histories(symbols):
+    # UNE SEULE connexion pour tous les symboles
+    results = {s: None for s in symbols}
+    ws = None
     try:
-        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=20)
-        ws.send(json.dumps({"ticks_history": symbol, "end": "latest", "count": count, "style": "ticks", "req_id": symbol}))
-        for _ in range(5):
-            data = json.loads(ws.recv())
-            if "history" in data and "prices" in data["history"]:
-                ws.close()
-                return [float(p) for p in data["history"]["prices"]]
-        ws.close()
-        return None
-    except:
-        return None
+        # On essaye 2 serveurs Deriv, le 2ème passe mieux sur Render
+        for url in ["wss://ws.binaryws.com/websockets/v3?app_id=1089", "wss://ws.derivws.com/websockets/v3?app_id=1089"]:
+            try:
+                ws = websocket.create_connection(url, timeout=15)
+                break
+            except Exception as e:
+                print(f"Echec connexion {url}: {e}")
+                continue
+        if ws is None:
+            return results
 
-def get_all_deriv_prices(symbols):
-    results = {}
-    for s in symbols:
-        hist = get_deriv_history(s, 20)
-        if hist and len(hist) > 0:
-            results[s] = hist
-        else:
-            results[s] = None
+        for symbol in symbols:
+            try:
+                ws.send(json.dumps({"ticks_history": symbol, "end": "latest", "count": 20, "style": "ticks"}))
+                # On attend la bonne réponse
+                for _ in range(10):
+                    data = json.loads(ws.recv())
+                    if "history" in data and "prices" in data["history"]:
+                        results[symbol] = [float(p) for p in data["history"]["prices"]]
+                        break
+                    if "error" in data:
+                        print(f"Erreur Deriv {symbol}: {data['error']}")
+                        break
+            except Exception as e:
+                print(f"Erreur {symbol}: {e}")
+                results[symbol] = None
+        ws.close()
+    except Exception as e:
+        print(f"Erreur globale Deriv: {e}")
     return results
 
 def ouvrir_position_deriv(symbol_deriv, direction):
-    # Stake 1 USD, TP 1 USD, SL 0.50 USD
     try:
-        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=20)
+        ws = websocket.create_connection("wss://ws.binaryws.com/websockets/v3?app_id=1089", timeout=20)
         ws.send(json.dumps({"authorize": DERIV_TOKEN}))
         auth = json.loads(ws.recv())
         if "error" in auth:
@@ -154,21 +164,19 @@ def analyse_et_trade():
             msg += f"🟡 BTC: {btc:.0f} -> PATIENCE\n"
 
     msg += "\n--- INDICES DERIV AUTO V75 ---\n"
-    deriv_symbols = ["R_75", "R_100", "R_50", "R_25"]
-    all_hist = get_all_deriv_prices(deriv_symbols)
+    all_hist = get_all_deriv_histories(["R_75", "R_100", "R_50", "R_25", "BOOM_1000", "CRASH_1000", "BOOM_500", "CRASH_500"])
 
     for name, symbol in [("V75", "R_75"), ("V100", "R_100"), ("V50", "R_50"), ("V25", "R_25")]:
         hist = all_hist.get(symbol)
-        if hist and len(hist) >= 20:
+        if hist and len(hist) >= 5:
             prix = hist[-1]
             max_prev = max(hist[:-1])
             min_prev = min(hist[:-1])
-            # Stratégie V75 : Cassure des 19 derniers ticks
             if prix > max_prev:
                 msg += f"🟢 {name}: {prix:.2f} -> BUY CASSURE HAUT\n"
                 if positions_ouvertes.get(symbol) != "ouvert":
                     res = ouvrir_position_deriv(symbol, "MULTUP")
-                    msg += f"🤖 AUTO V75: {res}\n"
+                    msg += f"🤖 AUTO: {res}\n"
                     if "✅" in res:
                         positions_ouvertes[symbol] = "ouvert"
                 else:
@@ -177,7 +185,7 @@ def analyse_et_trade():
                 msg += f"🟢 {name}: {prix:.2f} -> SELL CASSURE BAS\n"
                 if positions_ouvertes.get(symbol) != "ouvert":
                     res = ouvrir_position_deriv(symbol, "MULTDOWN")
-                    msg += f"🤖 AUTO V75: {res}\n"
+                    msg += f"🤖 AUTO: {res}\n"
                     if "✅" in res:
                         positions_ouvertes[symbol] = "ouvert"
                 else:
@@ -187,10 +195,9 @@ def analyse_et_trade():
         else:
             msg += f"⚠️ {name}: indisponible\n"
 
-    msg += "\n--- BOOM / CRASH - Affichage seulement ---\n"
-    boom_hist = get_all_deriv_prices(["BOOM_1000", "CRASH_1000", "BOOM_500", "CRASH_500"])
+    msg += "\n--- BOOM / CRASH ---\n"
     for name, symbol in [("BOOM 1000", "BOOM_1000"), ("CRASH 1000", "CRASH_1000"), ("BOOM 500", "BOOM_500"), ("CRASH 500", "CRASH_500")]:
-        hist = boom_hist.get(symbol)
+        hist = all_hist.get(symbol)
         if hist:
             msg += f"💥 {name}: {hist[-1]:.2f}\n"
         else:
