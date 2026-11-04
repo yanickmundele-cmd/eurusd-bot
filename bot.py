@@ -25,25 +25,28 @@ def get_yahoo_price(symbol):
         return None
 
 def get_deriv_price(symbol):
-    # symbol Deriv: R_75, R_100, R_50, R_25, BOOM_1000, CRASH_1000, etc.
     try:
-        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=10)
-        ws.send(json.dumps({"ticks": symbol}))
-        for _ in range(3):
+        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=15)
+        ws.send(json.dumps({"ticks_history": symbol, "end": "latest", "count": 1, "style": "ticks"}))
+        for _ in range(5):
             data = json.loads(ws.recv())
+            if "history" in data and "prices" in data["history"]:
+                price = data["history"]["prices"][-1]
+                ws.close()
+                return float(price)
             if "tick" in data:
                 price = data["tick"]["quote"]
                 ws.close()
-                return price
+                return float(price)
         ws.close()
         return None
-    except:
+    except Exception as e:
+        print(f"Erreur Deriv {symbol}: {e}")
         return None
 
 def analyse_all():
     msg = "📊 SIGNAUX DERIV + FOREX - Toutes les 5 min\n\n"
 
-    # 1. EURUSD - TA STRATEGIE 1.12150
     eurusd = get_yahoo_price("EURUSD")
     if eurusd:
         if eurusd <= 1.12150:
@@ -55,7 +58,6 @@ def analyse_all():
     else:
         msg += "⚠️ EURUSD: prix indisponible\n"
 
-    # 2. GBPUSD
     gbpusd = get_yahoo_price("GBPUSD")
     if gbpusd:
         if gbpusd <= 1.3410:
@@ -63,7 +65,6 @@ def analyse_all():
         else:
             msg += f"🟡 GBPUSD: {gbpusd:.5f} -> PATIENCE, attend 1.3410\n"
 
-    # 3. GOLD
     gold = get_yahoo_price("GC")
     if gold:
         if gold >= 4074:
@@ -73,7 +74,6 @@ def analyse_all():
         else:
             msg += f"🟡 GOLD: {gold:.1f} -> PATIENCE entre 4000 et 4074\n"
 
-    # 4. BTC
     btc = get_yahoo_price("BTC-USD")
     if btc:
         if btc >= 80300:
@@ -83,20 +83,19 @@ def analyse_all():
 
     msg += "\n--- INDICES DERIV ---\n"
 
-    # 5. VOLATILITY
     for name, symbol in [("V75", "R_75"), ("V100", "R_100"), ("V50", "R_50"), ("V25", "R_25")]:
         p = get_deriv_price(symbol)
         if p:
-            # Stratégie simple: si prix finit par .00 ou proche d'un chiffre rond, signal
             msg += f"📈 {name}: {p:.2f} -> Surveille, en attente de signal\n"
         else:
             msg += f"⚠️ {name}: indisponible\n"
 
-    # 6. BOOM / CRASH
     for name, symbol in [("BOOM 1000", "BOOM_1000"), ("CRASH 1000", "CRASH_1000"), ("BOOM 500", "BOOM_500"), ("CRASH 500", "CRASH_500")]:
         p = get_deriv_price(symbol)
         if p:
             msg += f"💥 {name}: {p:.2f}\n"
+        else:
+            msg += f"⚠️ {name}: indisponible\n"
 
     msg += "\nNe trade que les 🟢. Les 🟡 = PATIENCE."
     return msg
