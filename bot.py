@@ -1,6 +1,8 @@
 import os
 import threading
 import requests
+import json
+import websocket
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -12,36 +14,101 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot EURUSD en ligne ✅"
+    return "Bot Deriv en ligne ✅"
 
-def get_price():
+def get_yahoo_price(symbol):
     try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/EURUSD=X"
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}=X"
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10).json()
         return r['chart']['result'][0]['meta']['regularMarketPrice']
     except:
         return None
 
-def analyse():
-    price = get_price()
-    if price is None:
-        return "⚠️ Impossible de récupérer le prix EURUSD pour l'instant."
+def get_deriv_price(symbol):
+    # symbol Deriv: R_75, R_100, R_50, R_25, BOOM_1000, CRASH_1000, etc.
+    try:
+        ws = websocket.create_connection("wss://ws.derivws.com/websockets/v3?app_id=1089", timeout=10)
+        ws.send(json.dumps({"ticks": symbol}))
+        for _ in range(3):
+            data = json.loads(ws.recv())
+            if "tick" in data:
+                price = data["tick"]["quote"]
+                ws.close()
+                return price
+        ws.close()
+        return None
+    except:
+        return None
 
-    if price <= 1.12150:
-        return f"🟢 SIGNAL EURUSD M5 - BUY\n\nPrix actuel: {price:.5f}\nEntrée: {price:.5f} (dans ta BUY ZONE 1.12150)\nSL: 1.11850\nTP1: 1.12600\nTP2: 1.12900\n\nRaison: Prix dans ta zone Bollinger milieu, on achète."
-    elif price <= 1.12350:
-        return f"🟡 EURUSD M5 - PATIENCE\n\nPrix actuel: {price:.5f}\nOn attend 1.12150 pour acheter.\nNe pas acheter maintenant, encore {price-1.12150:.5f} au-dessus de la zone."
+def analyse_all():
+    msg = "📊 SIGNAUX DERIV + FOREX - Toutes les 5 min\n\n"
+
+    # 1. EURUSD - TA STRATEGIE 1.12150
+    eurusd = get_yahoo_price("EURUSD")
+    if eurusd:
+        if eurusd <= 1.12150:
+            msg += f"🟢 EURUSD: {eurusd:.5f} -> BUY | Entrée {eurusd:.5f} | SL 1.11850 | TP 1.12600\n"
+        elif eurusd <= 1.12350:
+            msg += f"🟡 EURUSD: {eurusd:.5f} -> PATIENCE, on attend 1.12150\n"
+        else:
+            msg += f"🔴 EURUSD: {eurusd:.5f} -> TROP HAUT, pas d'entrée\n"
     else:
-        return f"🔴 EURUSD M5 - PAS D'ENTREE\n\nPrix actuel: {price:.5f}\nTrop haut au-dessus de 1.12150.\nOn attend la descente."
+        msg += "⚠️ EURUSD: prix indisponible\n"
+
+    # 2. GBPUSD
+    gbpusd = get_yahoo_price("GBPUSD")
+    if gbpusd:
+        if gbpusd <= 1.3410:
+            msg += f"🟢 GBPUSD: {gbpusd:.5f} -> BUY ZONE 1.3410\n"
+        else:
+            msg += f"🟡 GBPUSD: {gbpusd:.5f} -> PATIENCE, attend 1.3410\n"
+
+    # 3. GOLD
+    gold = get_yahoo_price("GC")
+    if gold:
+        if gold >= 4074:
+            msg += f"🟢 GOLD: {gold:.1f} -> BUY, cassure 4074\n"
+        elif gold <= 4000:
+            msg += f"🟢 GOLD: {gold:.1f} -> BUY ZONE 4000\n"
+        else:
+            msg += f"🟡 GOLD: {gold:.1f} -> PATIENCE entre 4000 et 4074\n"
+
+    # 4. BTC
+    btc = get_yahoo_price("BTC-USD")
+    if btc:
+        if btc >= 80300:
+            msg += f"🟢 BTC: {btc:.0f} -> BUY cassure 80300\n"
+        else:
+            msg += f"🟡 BTC: {btc:.0f} -> PATIENCE, attend 80300\n"
+
+    msg += "\n--- INDICES DERIV ---\n"
+
+    # 5. VOLATILITY
+    for name, symbol in [("V75", "R_75"), ("V100", "R_100"), ("V50", "R_50"), ("V25", "R_25")]:
+        p = get_deriv_price(symbol)
+        if p:
+            # Stratégie simple: si prix finit par .00 ou proche d'un chiffre rond, signal
+            msg += f"📈 {name}: {p:.2f} -> Surveille, en attente de signal\n"
+        else:
+            msg += f"⚠️ {name}: indisponible\n"
+
+    # 6. BOOM / CRASH
+    for name, symbol in [("BOOM 1000", "BOOM_1000"), ("CRASH 1000", "CRASH_1000"), ("BOOM 500", "BOOM_500"), ("CRASH 500", "CRASH_500")]:
+        p = get_deriv_price(symbol)
+        if p:
+            msg += f"💥 {name}: {p:.2f}\n"
+
+    msg += "\nNe trade que les 🟢. Les 🟡 = PATIENCE."
+    return msg
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bonjour ! Bot EURUSD en ligne ✅\nJe t'envoie un signal toutes les 5 min.\nEnvoie /signal pour un signal maintenant.")
+    await update.message.reply_text("Bonjour Yan ! Bot Deriv en ligne ✅\nJe t'envoie tous les marchés toutes les 5 min.\nEnvoie /signal pour voir maintenant.")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(analyse())
+    await update.message.reply_text(analyse_all())
 
 async def auto_signal(context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=CHAT_ID, text=analyse())
+    await context.bot.send_message(chat_id=CHAT_ID, text=analyse_all())
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
