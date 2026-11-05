@@ -1,4 +1,1 @@
-Flask
-requests
-websocket-client
-python-telegram-bot[job-queue]
+
